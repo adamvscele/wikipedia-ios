@@ -21,6 +21,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) double longitude; //__deprecated; // Use coordinate instead (not using actual __deprecated tag due to inability to ignore the warning when these are used in Swift)
 @property (nullable, nonatomic, copy) NSDate *newsNotificationDate;
 @property (nullable, nonatomic, retain) NSDictionary *pageViews;
+@property (nullable, nonatomic, retain) NSArray<NSString *> *namesOfReadingLists;
 @property (nullable, nonatomic, copy) NSNumber *placesSortOrder;
 @property (nullable, nonatomic, copy) NSDate *savedDate;
 @property (nullable, nonatomic, copy) NSNumber *signedQuadKey;
@@ -32,7 +33,6 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) double viewedScrollPosition;
 @property (nonatomic) BOOL wasSignificantlyViewed;
 @property (nullable, nonatomic, copy) NSString *wikidataDescription;
-@property (nullable, nonatomic, retain) NSSet<ReadingListEntry *> *readingListEntries;
 
 @end
 

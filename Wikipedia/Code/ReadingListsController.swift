@@ -214,7 +214,7 @@ fileprivate class ReadingListsSyncOperation: AsyncOperation {
                                 remoteEntriesToCreateLocally[entry.id] = (entry, readingList)
                             }
                             for localEntry in localEntries {
-                                guard let article = localEntry.article, let articleURL = article.url, let articleSite = articleURL.wmf_site, let articleTitle = articleURL.wmf_title else {
+                                guard let articleKey = localEntry.articleKey, let articleURL = URL(string: articleKey), let articleSite = articleURL.wmf_site, let articleTitle = articleURL.wmf_title else {
                                     moc.delete(localEntry)
                                     continue
                                 }
@@ -303,7 +303,7 @@ fileprivate class ReadingListsSyncOperation: AsyncOperation {
                             }
                             entry.readingListEntryID = NSNumber(value: entryID)
                             entry.list = readingList
-                            entry.article = article
+                            entry.articleKey = article.key
                             entry.displayTitle = article.displayTitle
                             article.savedDate = DateFormatter.wmf_iso8601().date(from: remoteEntry.created)
                             article.addToDefaultReadingList()
@@ -524,8 +524,11 @@ public class ReadingListsController: NSObject {
             let moc = dataStore.viewContext
             let defaultList = moc.wmf_defaultReadingList
             for entry in defaultList.entries ?? [] {
-                entry.article?.removeFromDefaultReadingList()
-                entry.article?.savedDate = nil
+                if let key = entry.articleKey {
+                    let article = dataStore.fetchArticle(withKey: key, in: moc)
+                    article?.removeFromDefaultReadingList()
+                    article?.savedDate = nil
+                }
                 entry.isDeletedLocally = true
             }
             if moc.hasChanges {
@@ -547,10 +550,21 @@ public class ReadingListsController: NSObject {
     public func articlesWithLeadImages(for readingList: ReadingList, limit: Int) throws -> [WMFArticle] {
         assert(Thread.isMainThread)
         let moc = dataStore.viewContext
-        let request: NSFetchRequest<ReadingListEntry> = ReadingListEntry.fetchRequest()
-        request.predicate = NSPredicate(format: "list == %@ && isDeletedLocally != YES && article.imageURLString != NULL", readingList)
-        request.fetchLimit = limit
-        return (try moc.fetch(request)).flatMap { $0.article }
+        let entries = readingList.entries ?? []
+        var articles: [WMFArticle] = []
+        for entry in entries {
+            guard let articleKey = entry.articleKey else {
+                continue
+            }
+            guard let article = dataStore.fetchArticle(withKey: articleKey, in: moc), article.imageURLString != nil else {
+                continue
+            }
+            articles.append(article)
+            guard articles.count < limit else {
+                break
+            }
+        }
+        return articles
     }
     
 }
@@ -575,8 +589,48 @@ public extension NSManagedObjectContext {
 
 fileprivate extension WMFArticle {
     
+    var readingListEntries: [ReadingListEntry] {
+        guard let moc = self.managedObjectContext, let articleKey = key else {
+            return []
+        }
+        
+        let entriesRequest: NSFetchRequest<ReadingListEntry> = ReadingListEntry.fetchRequest()
+        entriesRequest.predicate = NSPredicate(format: "articleKey == %@", articleKey)
+        do {
+            return try moc.fetch(entriesRequest)
+        } catch let error {
+            DDLogError("Error fetching article list entries: \(error)")
+            return []
+        }
+    }
+    
+    var sortedReadingListEntries: [ReadingListEntry] {
+        guard let moc = self.managedObjectContext, let articleKey = key else {
+            return []
+        }
+        
+        let entriesRequest: NSFetchRequest<ReadingListEntry> = ReadingListEntry.fetchRequest()
+        entriesRequest.predicate = NSPredicate(format: "articleKey == %@", articleKey)
+        entriesRequest.relationshipKeyPathsForPrefetching = ["list"]
+        do {
+            let unsortedEntries = try moc.fetch(entriesRequest)
+            return unsortedEntries.sorted(by: { (entryA, entryB) -> Bool in
+                guard let nameA = entryA.list?.name else {
+                    return true
+                }
+                guard let nameB = entryB.list?.name else {
+                    return false
+                }
+                return nameA.localizedCaseInsensitiveCompare(nameB) == .orderedAscending
+            })
+        } catch let error {
+            DDLogError("Error fetching article list entries: \(error)")
+            return []
+        }
+    }
+    
     func fetchDefaultListEntry() -> ReadingListEntry? {
-        return readingListEntries?.first(where: { (entry) -> Bool in
+        return readingListEntries.first(where: { (entry) -> Bool in
             return (entry.list?.isDefault?.boolValue ?? false) && !entry.isDeletedLocally
         })
     }
@@ -592,7 +646,7 @@ fileprivate extension WMFArticle {
         
         let defaultReadingList = moc.wmf_defaultReadingList
         let defaultListEntry = NSEntityDescription.insertNewObject(forEntityName: "ReadingListEntry", into: moc) as? ReadingListEntry
-        defaultListEntry?.article = self
+        defaultListEntry?.articleKey = key
         defaultListEntry?.list = defaultReadingList
         defaultListEntry?.displayTitle = displayTitle
         defaultReadingList.updateCountOfEntries()
@@ -602,7 +656,7 @@ fileprivate extension WMFArticle {
         guard let moc = self.managedObjectContext else {
             return
         }
-        for entry in readingListEntries ?? [] {
+        for entry in readingListEntries {
             entry.isDeletedLocally = true
         }
         let defaultReadingList = moc.wmf_defaultReadingList

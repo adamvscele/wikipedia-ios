@@ -560,7 +560,7 @@ static uint64_t bundleHash() {
             while (results.count > 0) {
                 for (WMFArticle *article in results) {
                     ReadingListEntry *entry = [NSEntityDescription insertNewObjectForEntityForName:@"ReadingListEntry" inManagedObjectContext:moc];
-                    entry.article = article;
+                    entry.articleKey = article.key;
                     entry.displayTitle = article.displayTitle;
                     entry.list = defaultReadingList;
                 }

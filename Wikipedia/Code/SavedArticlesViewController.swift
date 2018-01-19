@@ -324,6 +324,7 @@ extension SavedArticlesViewController {
         
         cell.configure(article: article, index: indexPath.item, count: numberOfItems, shouldAdjustMargins: false, shouldShowSeparators: true, theme: theme, layoutOnly: layoutOnly)
         cell.actions = availableActions(at: indexPath)
+        let titles = article.namesOfReadingLists
         cell.tags = (readingLists: readingListsForArticle(at: indexPath), indexPath: indexPath)
         cell.delegate = self
         

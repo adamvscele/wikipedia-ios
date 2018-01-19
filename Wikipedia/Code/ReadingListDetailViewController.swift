@@ -76,7 +76,7 @@ class ReadingListDetailViewController: ColumnarCollectionViewController, Editabl
     }
     
     private func articleURL(at indexPath: IndexPath) -> URL? {
-        guard let entry = entry(at: indexPath), let key = entry.article?.key else {
+        guard let entry = entry(at: indexPath), let key = entry.articleKey else {
             assertionFailure("Can't get articleURL")
             return nil
         }
@@ -84,7 +84,7 @@ class ReadingListDetailViewController: ColumnarCollectionViewController, Editabl
     }
     
     private func article(at indexPath: IndexPath) -> WMFArticle? {
-        guard let entry = entry(at: indexPath), let key = entry.article?.key, let article = dataStore.fetchArticle(withKey: key) else {
+        guard let entry = entry(at: indexPath), let key = entry.articleKey, let article = dataStore.fetchArticle(withKey: key) else {
             return nil
         }
         return article
@@ -185,7 +185,7 @@ extension ReadingListDetailViewController: ActionDelegate {
     }
     
     private func delete(at indexPath: IndexPath) {
-        guard let entry = entry(at: indexPath), let article = entry.article else {
+        guard let entry = entry(at: indexPath), let articleKey = entry.articleKey, let article = dataStore.fetchArticle(withKey: articleKey) else {
             return
         }
         guard !readingList.isDefaultList else {
