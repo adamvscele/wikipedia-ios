@@ -2,6 +2,22 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>articles-count</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@v0@</string>
+		<key>v0</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>one</key>
+			<string>article</string>
+			<key>other</key>
+			<string>articles</string>
+		</dict>
+	</dict>
 	<key>lists-count</key>
 	<dict>
 		<key>NSStringLocalizedFormatKey</key>
@@ -186,7 +202,7 @@
 			<string>This year</string>
 		</dict>
 	</dict>
-	<key>saved-confirm-unsave-article-and-remove-from-reading-lists</key>
+	<key>saved-confirm-delete-article-and-remove-from-reading-lists</key>
 	<dict>
 		<key>NSStringLocalizedFormatKey</key>
 		<string>%#@v0@</string>
@@ -197,9 +213,9 @@
 			<key>NSStringFormatValueTypeKey</key>
 			<string>d</string>
 			<key>one</key>
-			<string>Are you sure you want to unsave this article and remove it from %1$d reading list?</string>
+			<string>Are you sure you want to delete this article and remove it from %1$d reading list?</string>
 			<key>other</key>
-			<string>Are you sure you want to unsave this article and remove it from %1$d reading lists?</string>
+			<string>Are you sure you want to delete this article and remove it from %1$d reading lists?</string>
 		</dict>
 	</dict>
 	<key>unsave-article-and-remove-from-reading-lists</key>

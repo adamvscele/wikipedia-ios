@@ -39,6 +39,7 @@
 "account-creation-passwords-mismatched" = "Alert shown if the user doesn't enter the same password in both password boxes";
 "account-creation-saving" = "Alert shown when user saves account creation form.\n{{Identical|Saving}}";
 "account-creation-title" = "Title for account creation interface";
+"action-article-deleted-accessibility-notification" = "Notification spoken after user removes an articles from a list.";
 "action-cancel" = "Title of the cancel action.";
 "action-read" = "Title for the 'Read' action\n{{Identical|Read}}";
 "action-save" = "Title for the 'Save' action\n{{Identical|Save}}";
@@ -73,6 +74,7 @@
 "article-toolbar-reading-themes-controls-toolbar-item" = "Accessibility label for the Reading Themes Controls article toolbar item";
 "article-unable-to-load-article" = "Alert text shown when unable to load an article";
 "article-unable-to-load-section" = "Displayed within the article content when a section fails to render for some reason.";
+"articles-count" = "Describes the number of articles";
 "back" = "Generic 'Back' title for back button\n{{Identical|Back}}";
 "back-button-accessibility-label" = "Accessibility label for a button to navigate back.\n{{Identical|Back}}";
 "button-done" = "Button text for done button used in various places.\n{{Identical|Done}}";
@@ -335,8 +337,8 @@
 "request-feedback-on-error" = "Displayed to beta users when they encounter an error we'd like feedback on";
 "saved-all-articles-title" = "Title of the all articles button on Saved screen";
 "saved-clear-all" = "Text of the button shown at the top of saved pages which deletes all the saved pages\n{{Identical|Clear}}";
-"saved-confirm-unsave-article-and-remove-from-reading-lists" = "Confirmation prompt for action that unsaves a selected article and removes it from all reading lists";
-"saved-confirm-unsave-articles-and-remove-from-reading-lists" = "Confirmation prompt for action that unsaves a selected articles and removes them from all reading lists";
+"saved-confirm-delete-article-and-remove-from-reading-lists" = "Confirmation prompt for action that deletes a selected article and removes it from all reading lists";
+"saved-confirm-delete-articles-and-remove-from-reading-lists" = "Confirmation prompt for action that deletes a selected articles and removes them from all reading lists";
 "saved-default-reading-list-tag" = "Tag on the default reading list cell explaining that the list cannot be deleted";
 "saved-pages-clear-cancel" = "Button text for cancelling delete all action\n{{Identical|Cancel}}";
 "saved-pages-clear-confirmation-heading" = "Heading text of delete all confirmation dialog";

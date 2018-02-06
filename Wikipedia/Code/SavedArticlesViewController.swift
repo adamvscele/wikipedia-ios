@@ -199,44 +199,13 @@ class SavedArticlesViewController: ColumnarCollectionViewController, EditableCol
         guard let article = article(at: indexPath) else {
             return
         }
-        
-        delete(articles: [article])
+        dataStore.readingListsController.unsave(article)
     }
     
     private func delete(articles: [WMFArticle]) {
-        let unsaveAction = { (articles: [WMFArticle]) in
-            for article in articles {
-                self.dataStore.readingListsController.unsave(article)
-            }
-            let accessibilityNotification = String.localizedStringWithFormat(WMFLocalizedString("article-deleted-accessibility-notification", value: "{{PLURAL:%1$d|artice|articles}} deleted", comment: "Notification spoken after user deletes an article from the list."),  articles.count)
-            UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, accessibilityNotification)
-        }
-        
-        let allArticlesAreOnlyInTheDefaultList = articles.filter { $0.isOnlyInDefaultList }.count == articles.count
-        guard allArticlesAreOnlyInTheDefaultList else {
-            let title: String
-            if articles.count == 1, let article = articles.first {
-                title = String.localizedStringWithFormat(WMFLocalizedString("saved-confirm-unsave-article-and-remove-from-reading-lists", value: "Are you sure you want to unsave this article and remove it from {{PLURAL:%1$d|%1$d reading list|%1$d reading lists}}?", comment: "Confirmation prompt for action that unsaves a selected article and removes it from all reading lists"), article.readingLists?.count ?? 0)
-            } else {
-                title = WMFLocalizedString("saved-confirm-unsave-articles-and-remove-from-reading-lists", value: "Are you sure you want to unsave these articles and remove them from all reading lists?", comment: "Confirmation prompt for action that unsaves a selected articles and removes them from all reading lists")
-            }
-            let alertController = UIAlertController(title: title, message: nil, preferredStyle: .alert)
-            let articleKeys = articles.flatMap { $0.key }
-            alertController.addAction(UIAlertAction(title: CommonStrings.shortUnsaveTitle, style: .destructive, handler: { (alertAction) in
-                // Re-fetch articles to ensure they weren't deleted or modified since the user performed the action and the sheet was shown
-                let articles = articleKeys.flatMap { self.dataStore.fetchArticle(withKey: $0) }
-                unsaveAction(articles)
-            }))
-            alertController.addAction(UIAlertAction(title: CommonStrings.cancelActionTitle, style: .cancel, handler: { (cancelAction) in
-                self.collectionView.reloadData()
-            }))
-            present(alertController, animated: true, completion: nil)
-            return
-        }
-        unsaveAction(articles)
+        articles.forEach { dataStore.readingListsController.unsave($0) }
+        UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, CommonStrings.accessibilityArticleDeletedNotification(articleCount: articles.count))
     }
-    
-    
     
     // MARK: - Themeable
     
@@ -393,6 +362,41 @@ extension SavedArticlesViewController {
 // MARK: - ActionDelegate
 
 extension SavedArticlesViewController: ActionDelegate {
+    
+    func shouldPerformAction(_ action: Action) -> Bool {
+        guard let article = article(at: action.indexPath) else {
+            return false
+        }
+        guard action.type == .delete, shouldPresentDeletionAlert(for: [article]) else {
+            return self.editController.didPerformAction(action)
+        }
+        let alert = createDeletionAlert(for: [article])
+        let cancelAction = UIAlertAction(title: CommonStrings.cancelActionTitle, style: .cancel, handler: { (cancel) in
+            self.editController.close()
+            alert.dismiss(animated: true, completion: nil)
+        })
+        let deleteAction = UIAlertAction(title: CommonStrings.deleteActionTitle, style: .destructive, handler: { (delete) in
+            let _ = self.editController.didPerformAction(action)
+        })
+        alert.addAction(cancelAction)
+        alert.addAction(deleteAction)
+        present(alert, animated: true)
+        return true
+    }
+    
+    func shouldPresentDeletionAlert(for articles: [WMFArticle]) -> Bool {
+        return articles.filter { $0.isOnlyInDefaultList }.count != articles.count
+    }
+    
+    func createDeletionAlert(for articles: [WMFArticle]) -> UIAlertController {
+        let title: String
+        if articles.count == 1, let article = articles.first {
+            title = String.localizedStringWithFormat(WMFLocalizedString("saved-confirm-delete-article-and-remove-from-reading-lists", value: "Are you sure you want to delete this article and remove it from {{PLURAL:%1$d|%1$d reading list|%1$d reading lists}}?", comment: "Confirmation prompt for action that deletes a selected article and removes it from all reading lists"), article.readingLists?.count ?? 0)
+        } else {
+            title = WMFLocalizedString("saved-confirm-delete-articles-and-remove-from-reading-lists", value: "Are you sure you want to delete these articles and remove them from all reading lists?", comment: "Confirmation prompt for action that deletes a selected articles and removes them from all reading lists")
+        }
+        return UIAlertController(title: title, message: nil, preferredStyle: .alert)
+    }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard editController.isClosed else {
@@ -424,8 +428,25 @@ extension SavedArticlesViewController: ActionDelegate {
             present(addArticlesToReadingListViewController, animated: true, completion: nil)
             return true
         case .unsave:
-            delete(articles: articles)
-            return true
+            if shouldPresentDeletionAlert(for: articles) {
+                let alert = createDeletionAlert(for: articles)
+                let cancelAction = UIAlertAction(title: CommonStrings.cancelActionTitle, style: .cancel, handler: { (action) in
+                    alert.dismiss(animated: true, completion: nil)
+                })
+                let deleteAction = UIAlertAction(title: CommonStrings.deleteActionTitle, style: .destructive, handler: { (action) in
+                    self.delete(articles: articles)
+                })
+                alert.addAction(cancelAction)
+                alert.addAction(deleteAction)
+                var didPerform = false
+                present(alert, animated: true, completion: {
+                    didPerform = true
+                })
+                return didPerform
+            } else {
+                self.delete(articles: articles)
+                return true
+            }
         default:
             break
         }
@@ -442,23 +463,13 @@ extension SavedArticlesViewController: ActionDelegate {
         switch action.type {
         case .delete:
             delete(at: indexPath)
+            UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, CommonStrings.accessibilityArticleDeletedNotification())
             return true
-        case .save:
-            if let articleURL = articleURL(at: indexPath) {
-                dataStore.savedPageList.addSavedPage(with: articleURL)
-                UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, CommonStrings.accessibilitySavedNotification)
-                return true
-            }
-        case .unsave:
-            if let articleURL = articleURL(at: indexPath) {
-                dataStore.savedPageList.removeEntry(with: articleURL)
-                UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, CommonStrings.accessibilityUnsavedNotification)
-                return true
-            }
         case .share:
             return share(article: article(at: indexPath), articleURL: articleURL(at: indexPath), at: indexPath, dataStore: dataStore, theme: theme)
+        default:
+            return false
         }
-        return false
     }
     
     func availableActions(at indexPath: IndexPath) -> [Action] {

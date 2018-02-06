@@ -371,9 +371,8 @@ extension ReadingListsViewController: ActionDelegate {
         
         let title = String.localizedStringWithFormat(WMFLocalizedString("delete-reading-list-alert-title", value: "Delete %1$@ and all of %2$@ saved articles?", comment: "Title of the altert shown before deleting selected reading lists."), "\(readingListString)", "\(possesiveDeterminer)")
         let message = String.localizedStringWithFormat(WMFLocalizedString("delete-reading-list-alert-message", value: "Your %1$@ and %2$@ will be deleted", comment: "Title of the altert shown before deleting selected reading lists."), "\(listCountString)", "\(articleCountString)")
-        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         
-        return alert
+        return UIAlertController(title: title, message: message, preferredStyle: .alert)
     }
     
     func didPerformBatchEditToolbarAction(_ action: BatchEditToolbarAction) -> Bool {

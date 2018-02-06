@@ -39,6 +39,7 @@
 "account-creation-passwords-mismatched" = "Password fields do not match.";
 "account-creation-saving" = "Saving...";
 "account-creation-title" = "Create a new account";
+"action-article-deleted-accessibility-notification" = "$1 deleted";
 "action-cancel" = "Cancel";
 "action-read" = "Read";
 "action-save" = "Save";
@@ -73,6 +74,7 @@
 "article-toolbar-reading-themes-controls-toolbar-item" = "Reading Themes Controls";
 "article-unable-to-load-article" = "Unable to load article.";
 "article-unable-to-load-section" = "Unable to load this section. Try refreshing the article to see if it fixes the problem.";
+"articles-count" = "{{PLURAL:$1|article|articles}}";
 "back" = "Back";
 "back-button-accessibility-label" = "Back";
 "button-done" = "Done";
@@ -335,8 +337,8 @@
 "request-feedback-on-error" = "The app has encountered a problem that our developers would like to know more about. Please tap here to send us an email with the error details.";
 "saved-all-articles-title" = "All articles";
 "saved-clear-all" = "Clear";
-"saved-confirm-unsave-article-and-remove-from-reading-lists" = "Are you sure you want to unsave this article and remove it from {{PLURAL:$1|$1 reading list|$1 reading lists}}?";
-"saved-confirm-unsave-articles-and-remove-from-reading-lists" = "Are you sure you want to unsave these articles and remove them from all reading lists?";
+"saved-confirm-delete-article-and-remove-from-reading-lists" = "Are you sure you want to delete this article and remove it from {{PLURAL:$1|$1 reading list|$1 reading lists}}?";
+"saved-confirm-delete-articles-and-remove-from-reading-lists" = "Are you sure you want to delete these articles and remove them from all reading lists?";
 "saved-default-reading-list-tag" = "This list cannot be deleted";
 "saved-pages-clear-cancel" = "Cancel";
 "saved-pages-clear-confirmation-heading" = "Are you sure you want to delete all your saved articles and remove them from all reading lists?";
