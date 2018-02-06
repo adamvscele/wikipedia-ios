@@ -251,6 +251,10 @@ public class NavigationBar: SetupView {
         underBarViewHeightConstraint.isActive = false
         underBarView.wmf_addSubviewWithConstraintsToEdges(view)
     }
+    
+    @objc public override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        return point.y <= visibleHeight
+    }
 }
 
 extension NavigationBar: Themeable {

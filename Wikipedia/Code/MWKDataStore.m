@@ -547,7 +547,7 @@ static uint64_t bundleHash() {
 
             NSFetchRequest<WMFArticle *> *request = [WMFArticle fetchRequest];
             request.fetchLimit = 500;
-            request.predicate = [NSPredicate predicateWithFormat:@"savedDate != NULL && SUBQUERY(readingListEntries, $x, $x.list == %@).@count == 0", defaultReadingList];
+            request.predicate = [NSPredicate predicateWithFormat:@"savedDate != NULL && readingLists.@count == 0", defaultReadingList];
 
             NSError *migrationFetchError = nil;
             NSArray<WMFArticle *> *results = [moc executeFetchRequest:request error:&migrationFetchError];
@@ -560,7 +560,7 @@ static uint64_t bundleHash() {
             while (results.count > 0) {
                 for (WMFArticle *article in results) {
                     ReadingListEntry *entry = [NSEntityDescription insertNewObjectForEntityForName:@"ReadingListEntry" inManagedObjectContext:moc];
-                    entry.article = article;
+                    entry.articleKey = article.key;
                     entry.displayTitle = article.displayTitle;
                     entry.list = defaultReadingList;
                 }
@@ -1556,14 +1556,14 @@ static uint64_t bundleHash() {
 
 - (nullable WMFArticle *)fetchArticleWithKey:(NSString *)key inManagedObjectContext:(nonnull NSManagedObjectContext *)moc {
     WMFArticle *article = nil;
-    if (moc == self.viewContext) {
+    if (moc == _viewContext) { // use ivar to avoid main thread check
         article = [self.articlePreviewCache objectForKey:key];
         if (article) {
             return article;
         }
     }
     article = [moc fetchArticleWithKey:key];
-    if (article && moc == self.viewContext) {
+    if (article && moc == _viewContext) { // use ivar to avoid main thread check
         [self.articlePreviewCache setObject:article forKey:key];
     }
     return article;

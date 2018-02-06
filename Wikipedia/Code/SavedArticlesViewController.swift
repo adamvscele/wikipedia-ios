@@ -42,12 +42,6 @@ class SavedArticlesViewController: ColumnarCollectionViewController, EditableCol
         editController = CollectionViewEditController(collectionView: collectionView)
         editController.delegate = self
         editController.navigationDelegate = self
-        
-        // Keep until we decide whether we need these translations.
-        _ = WMFLocalizedString("saved-clear-all", value: "Clear", comment: "Text of the button shown at the top of saved pages which deletes all the saved pages\n{{Identical|Clear}}")
-        _ = WMFLocalizedString("saved-pages-clear-confirmation-heading", value: "Are you sure you want to delete all your saved pages?", comment: "Heading text of delete all confirmation dialog")
-        _ = WMFLocalizedString("saved-pages-clear-cancel", value: "Cancel", comment: "Button text for cancelling delete all action\n{{Identical|Cancel}}")
-        _ = WMFLocalizedString("saved-pages-clear-delete-all", value: "Yes, delete all", comment: "Button text for confirming delete all action\n{{Identical|Delete all}}")
     }
     
     private var isFirstAppearance = true
@@ -147,7 +141,7 @@ class SavedArticlesViewController: ColumnarCollectionViewController, EditableCol
         let alert = UIAlertController(title: "Sort saved articles", message: nil, preferredStyle: .actionSheet)
         alert.addAction(sortActions.recentlyAdded)
         alert.addAction(sortActions.title)
-        let cancel = UIAlertAction(title: "Cancel", style: .cancel) { (actions) in
+        let cancel = UIAlertAction(title: CommonStrings.cancelActionTitle, style: .cancel) { (actions) in
             self.dismiss(animated: true, completion: nil)
         }
         alert.addAction(cancel)
@@ -184,20 +178,65 @@ class SavedArticlesViewController: ColumnarCollectionViewController, EditableCol
     }
     
     private func readingListsForArticle(at indexPath: IndexPath) -> [ReadingList] {
-        // different order every time cause set
-        guard let article = article(at: indexPath), let entries = article.readingListEntries else {
+        guard let article = article(at: indexPath), let moc = article.managedObjectContext else {
             return []
         }
-        let readingLists = entries.filter { $0.list?.isDefaultList == false && $0.list?.isDeletedLocally == false }.flatMap { $0.list }
-        return readingLists
+        
+        let request: NSFetchRequest<ReadingList> = ReadingList.fetchRequest()
+        request.predicate = NSPredicate(format:"ANY articles == %@ && isDefault == NO", article)
+        request.sortDescriptors = [NSSortDescriptor(key: "canonicalName", ascending: true)]
+        request.fetchLimit = 4
+        
+        do {
+            return try moc.fetch(request)
+        } catch let error {
+            DDLogError("Error fetching lists: \(error)")
+            return []
+        }
     }
     
     private func delete(at indexPath: IndexPath) {
-        guard let articleURL = self.articleURL(at: indexPath) else {
+        guard let article = article(at: indexPath) else {
             return
         }
-        dataStore.savedPageList.removeEntry(with: articleURL)
+        
+        delete(articles: [article])
     }
+    
+    private func delete(articles: [WMFArticle]) {
+        let unsaveAction = { (articles: [WMFArticle]) in
+            for article in articles {
+                self.dataStore.readingListsController.unsave(article)
+            }
+            let accessibilityNotification = String.localizedStringWithFormat(WMFLocalizedString("article-deleted-accessibility-notification", value: "{{PLURAL:%1$d|artice|articles}} deleted", comment: "Notification spoken after user deletes an article from the list."),  articles.count)
+            UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, accessibilityNotification)
+        }
+        
+        let allArticlesAreOnlyInTheDefaultList = articles.filter { $0.isOnlyInDefaultList }.count == articles.count
+        guard allArticlesAreOnlyInTheDefaultList else {
+            let title: String
+            if articles.count == 1, let article = articles.first {
+                title = String.localizedStringWithFormat(WMFLocalizedString("saved-confirm-unsave-article-and-remove-from-reading-lists", value: "Are you sure you want to unsave this article and remove it from {{PLURAL:%1$d|%1$d reading list|%1$d reading lists}}?", comment: "Confirmation prompt for action that unsaves a selected article and removes it from all reading lists"), article.readingLists?.count ?? 0)
+            } else {
+                title = WMFLocalizedString("saved-confirm-unsave-articles-and-remove-from-reading-lists", value: "Are you sure you want to unsave these articles and remove them from all reading lists?", comment: "Confirmation prompt for action that unsaves a selected articles and removes them from all reading lists")
+            }
+            let alertController = UIAlertController(title: title, message: nil, preferredStyle: .alert)
+            let articleKeys = articles.flatMap { $0.key }
+            alertController.addAction(UIAlertAction(title: CommonStrings.shortUnsaveTitle, style: .destructive, handler: { (alertAction) in
+                // Re-fetch articles to ensure they weren't deleted or modified since the user performed the action and the sheet was shown
+                let articles = articleKeys.flatMap { self.dataStore.fetchArticle(withKey: $0) }
+                unsaveAction(articles)
+            }))
+            alertController.addAction(UIAlertAction(title: CommonStrings.cancelActionTitle, style: .cancel, handler: { (cancelAction) in
+                self.collectionView.reloadData()
+            }))
+            present(alertController, animated: true, completion: nil)
+            return
+        }
+        unsaveAction(articles)
+    }
+    
+    
     
     // MARK: - Themeable
     
@@ -224,8 +263,9 @@ class SavedArticlesViewController: ColumnarCollectionViewController, EditableCol
         editController.transformBatchEditPaneOnScroll()
     }
     
-    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        navigationBarHider.scrollViewWillBeginDragging(scrollView)
+    override func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        navigationBarHider.scrollViewWillBeginDragging(scrollView) // this & following UIScrollViewDelegate calls could be in a default implementation
+        super.scrollViewWillBeginDragging(scrollView)
     }
     
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
@@ -243,6 +283,20 @@ class SavedArticlesViewController: ColumnarCollectionViewController, EditableCol
     
     func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
         navigationBarHider.scrollViewDidScrollToTop(scrollView)
+    }
+    
+    // MARK: - Clear Saved Articles
+    
+    @objc func clear() {
+        let clearMessage = WMFLocalizedString("saved-pages-clear-confirmation-heading", value: "Are you sure you want to delete all your saved articles and remove them from all reading lists?", comment: "Heading text of delete all confirmation dialog")
+        let clearCancel = WMFLocalizedString("saved-pages-clear-cancel", value: "Cancel", comment: "Button text for cancelling delete all action\n{{Identical|Cancel}}")
+        let clearConfirm = WMFLocalizedString("saved-pages-clear-delete-all", value: "Yes, delete all", comment: "Button text for confirming delete all action\n{{Identical|Delete all}}")
+        let sheet = UIAlertController(title: nil, message: clearMessage, preferredStyle: .alert)
+        sheet.addAction(UIAlertAction(title: clearCancel, style: .cancel, handler: nil))
+        sheet.addAction(UIAlertAction(title: clearConfirm, style: .destructive, handler: { (action) in
+            self.dataStore.readingListsController.unsaveAllArticles()
+        }))
+        present(sheet, animated: true, completion: nil)
     }
 }
 
@@ -359,12 +413,10 @@ extension SavedArticlesViewController: ActionDelegate {
             return false
         }
         
-        let articleURLs = selectedIndexPaths.flatMap({ articleURL(at: $0) })
         let articles = selectedIndexPaths.flatMap({ article(at: $0) })
         
         switch action.type {
         case .update:
-            print("Update")
             return false
         case .addToList:
             let addArticlesToReadingListViewController = AddArticlesToReadingListViewController(with: dataStore, articles: articles, theme: theme)
@@ -372,8 +424,7 @@ extension SavedArticlesViewController: ActionDelegate {
             present(addArticlesToReadingListViewController, animated: true, completion: nil)
             return true
         case .unsave:
-            dataStore.savedPageList.removeEntries(with: articleURLs)
-            UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, CommonStrings.accessibilityUnsavedNotification)
+            delete(articles: articles)
             return true
         default:
             break
@@ -391,7 +442,6 @@ extension SavedArticlesViewController: ActionDelegate {
         switch action.type {
         case .delete:
             delete(at: indexPath)
-            UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, WMFLocalizedString("article-deleted-accessibility-notification", value: "Article deleted", comment: "Notification spoken after user deletes an article from the list."))
             return true
         case .save:
             if let articleURL = articleURL(at: indexPath) {
@@ -406,23 +456,7 @@ extension SavedArticlesViewController: ActionDelegate {
                 return true
             }
         case .share:
-            let shareActivityController: ShareActivityController?
-            if let article = article(at: indexPath) {
-                shareActivityController = ShareActivityController(article: article, context: self)
-            } else if let articleURL =  self.articleURL(at: indexPath) {
-                shareActivityController = ShareActivityController(articleURL: articleURL, userDataStore: dataStore, context: self)
-            } else {
-                shareActivityController = nil
-            }
-            if let viewController = shareActivityController {
-                if UIDevice.current.userInterfaceIdiom == .pad {
-                    let cell = collectionView.cellForItem(at: indexPath)
-                    viewController.popoverPresentationController?.sourceView = cell ?? view
-                    viewController.popoverPresentationController?.sourceRect = cell?.bounds ?? view.bounds
-                }
-                present(viewController, animated: true, completion: nil)
-                return true
-            }
+            return share(article: article(at: indexPath), articleURL: articleURL(at: indexPath), at: indexPath, dataStore: dataStore, theme: theme)
         }
         return false
     }
@@ -439,6 +473,8 @@ extension SavedArticlesViewController: ActionDelegate {
         return actions
     }
 }
+
+extension SavedArticlesViewController: ShareableArticlesProvider {}
 
 // MARK: - SavedViewControllerDelegate
 

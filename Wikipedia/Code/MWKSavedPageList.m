@@ -107,6 +107,18 @@ NSString *const MWKSavedPageExportedSchemaVersionKey = @"schemaVersion";
     }
 }
 
+- (nullable WMFArticle *)entryForKey:(NSString *)key {
+    if (!key) {
+        return nil;
+    }
+    WMFArticle *article = [self.dataStore fetchArticleWithKey:key];
+    if (article.savedDate) {
+        return article;
+    } else {
+        return nil;
+    }
+}
+
 - (void)enumerateItemsWithBlock:(void (^)(WMFArticle *_Nonnull entry, BOOL *stop))block {
     if (!block) {
         return;
@@ -165,7 +177,7 @@ NSString *const MWKSavedPageExportedSchemaVersionKey = @"schemaVersion";
 }
 
 - (void)removeAllEntries {
-    [self.dataStore.readingListsController removeAllArticlesFromDefaultReadingList];
+    [self.dataStore.readingListsController unsaveAllArticles];
 }
 
 - (void)removeEntriesWithURLs:(NSArray<NSURL *> *)urls {

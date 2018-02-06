@@ -22,26 +22,39 @@ class ReadingListsViewController: ColumnarCollectionViewController {
     private var articles: [WMFArticle] = [] // the articles that will be added to a reading list
     private var readingLists: [ReadingList]? // the displayed reading lists
     private var displayType: ReadingListsDisplayType = .readingListsTab
-    
+    var isShowingDefaultList = false
     public weak var delegate: ReadingListsViewControllerDelegate?
     
     func setupFetchedResultsController() {
         let request: NSFetchRequest<ReadingList> = ReadingList.fetchRequest()
         let basePredicate = NSPredicate(format: "isDeletedLocally == NO")
-        
-        if let names = readingLists?.flatMap({ $0.name }) {
-            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [basePredicate, NSPredicate(format:"name IN %@", names)])
+        if let readingLists = readingLists, readingLists.count > 0 {
+            isShowingDefaultList = readingLists.filter { $0.isDefaultList }.count > 0
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [basePredicate, NSPredicate(format:"self IN %@", readingLists)])
+        } else if displayType == .addArticlesToReadingList {
+            let commonReadingLists = articles.reduce(articles.first?.readingLists ?? []) { $0.intersection($1.readingLists ?? []) }
+            var subpredicates: [NSPredicate] = []
+            if commonReadingLists.count > 0 {
+                subpredicates.append(NSPredicate(format:"NOT (self IN %@)", commonReadingLists))
+            }
+            subpredicates.append(basePredicate)
+            isShowingDefaultList = false
+            subpredicates.append(NSPredicate(format:"isDefault == NO"))
+            request.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: subpredicates)
         } else {
+            isShowingDefaultList = true
             request.predicate = basePredicate
         }
         
         request.sortDescriptors = [NSSortDescriptor(key: "isDefault", ascending: false), NSSortDescriptor(key: "canonicalName", ascending: true)]
         fetchedResultsController = NSFetchedResultsController(fetchRequest: request, managedObjectContext: dataStore.viewContext, sectionNameKeyPath: nil, cacheName: nil)
+        
         do {
             try fetchedResultsController.performFetch()
         } catch let error {
             DDLogError("Error fetching reading lists: \(error)")
         }
+        
         collectionView.reloadData()
     }
     
@@ -134,7 +147,8 @@ class ReadingListsViewController: ColumnarCollectionViewController {
         let lastFourArticlesWithLeadImages = try? readingListsController.articlesWithLeadImages(for: readingList, limit: 4)
         
         guard !readingList.isDefaultList else {
-            cell.configure(with: CommonStrings.shortSavedTitle, description: WMFLocalizedString("reading-lists-default-list-description", value: "Default saved pages list", comment: "The description of the default saved pages list"), isDefault: true, index: indexPath.item, count: numberOfItems, shouldAdjustMargins: false, shouldShowSeparators: true, theme: theme, for: displayType, articleCount: articleCount, lastFourArticlesWithLeadImages: lastFourArticlesWithLeadImages ?? [], layoutOnly: layoutOnly)
+            let defaultListTitle = WMFLocalizedString("reading-lists-default-list-title", value: "Bookmarks", comment: "The title of the default saved pages list")
+            cell.configure(with: defaultListTitle, description: WMFLocalizedString("reading-lists-default-list-description", value: "Default list for saved articles", comment: "The description of the default saved pages list"), isDefault: true, index: indexPath.item, count: numberOfItems, shouldAdjustMargins: false, shouldShowSeparators: true, theme: theme, for: displayType, articleCount: articleCount, lastFourArticlesWithLeadImages: lastFourArticlesWithLeadImages ?? [], layoutOnly: layoutOnly)
             cell.layoutMargins = layout.readableMargins
             return
         }
@@ -163,7 +177,7 @@ class ReadingListsViewController: ColumnarCollectionViewController {
         isEmpty = true
         for sectionIndex in 0..<sectionCount {
             let numberOfItems = self.collectionView(collectionView, numberOfItemsInSection: sectionIndex)
-            if numberOfItems > 1 {
+            if numberOfItems > (isShowingDefaultList ? 1 : 0) {
                 editController.hasDefaultCell = numberOfItems == 1
                 isEmpty = false
                 break
@@ -339,19 +353,26 @@ extension ReadingListsViewController: ActionDelegate {
     }
     
     private func entriesCount(for readingLists: [ReadingList]) -> Int {
-        return readingLists.flatMap({ $0.entries?.count }).reduce(0, +)
+        return Int(readingLists.flatMap({ $0.countOfEntries }).reduce(0, +))
     }
     
     func createDeletionAlert(for readingLists: [ReadingList]) -> UIAlertController {
+        let readingListsCount = readingLists.count
         let articlesCount = entriesCount(for: readingLists)
-        let manyArticles = articlesCount > 1
-        let manyReadingLists = readingLists.count > 1
-        let readingListString = manyReadingLists ? "reading lists" : "reading list"
-        let articleString = manyArticles ? "articles" : "article"
-        let title = "Delete \(readingListString) and all of \(manyReadingLists ? "their" : "its") saved articles?"
-        let message = "Your \(readingLists.count) \(readingListString) and \(articlesCount) \(articleString) will be deleted"
         
+        let readingListFormat = WMFLocalizedString("reading-lists-format", value:"{{PLURAL:%1$d|reading list|reading lists}}", comment: "Describes the number of reading lists")
+        let listCountFormat = WMFLocalizedString("lists-count", value:"{{PLURAL:%1$d|%1$d list|%1$d lists}}", comment: "Describes the number of lists - %1$d is replaced with the number of reading lists")
+        let possesiveDeterminerFormat = WMFLocalizedString("possesive-determiner", value:"{{PLURAL:%1$d|its|their}}", comment: "Expresses possession or belonging, e.g., 'reading list and its articles'")
+        
+        let readingListString = String.localizedStringWithFormat(readingListFormat, readingListsCount)
+        let listCountString = String.localizedStringWithFormat(listCountFormat, readingListsCount)
+        let articleCountString = String.localizedStringWithFormat(CommonStrings.articleCountFormat, articlesCount)
+        let possesiveDeterminer = String.localizedStringWithFormat(possesiveDeterminerFormat, readingListsCount)
+        
+        let title = String.localizedStringWithFormat(WMFLocalizedString("delete-reading-list-alert-title", value: "Delete %1$@ and all of %2$@ saved articles?", comment: "Title of the altert shown before deleting selected reading lists."), "\(readingListString)", "\(possesiveDeterminer)")
+        let message = String.localizedStringWithFormat(WMFLocalizedString("delete-reading-list-alert-message", value: "Your %1$@ and %2$@ will be deleted", comment: "Title of the altert shown before deleting selected reading lists."), "\(listCountString)", "\(articleCountString)")
         let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        
         return alert
     }
     
@@ -369,10 +390,10 @@ extension ReadingListsViewController: ActionDelegate {
         case .delete:
             if shouldPresentDeletionAlert(for: readingLists) {
                 let alert = createDeletionAlert(for: readingLists)
-                let cancelAction = UIAlertAction(title: "Cancel", style: .cancel, handler: { (action) in
+                let cancelAction = UIAlertAction(title: CommonStrings.cancelActionTitle, style: .cancel, handler: { (action) in
                     alert.dismiss(animated: true, completion: nil)
                 })
-                let deleteAction = UIAlertAction(title: "Delete", style: .destructive, handler: { (action) in
+                let deleteAction = UIAlertAction(title: CommonStrings.deleteActionTitle, style: .destructive, handler: { (action) in
                     self.deleteReadingLists(readingLists)
                 })
                 alert.addAction(cancelAction)

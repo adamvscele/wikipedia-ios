@@ -12,6 +12,7 @@ struct APIReadingList: Codable {
         case description
         case created
         case updated
+        case deleted
         case isDefault = "default"
     }
     
@@ -20,6 +21,7 @@ struct APIReadingList: Codable {
     let description: String
     let created: String
     let updated: String
+    let deleted: Bool?
     let isDefault: Bool
 }
 
@@ -34,6 +36,14 @@ struct APIReadingListEntry: Codable {
     let title: String
     let created: String
     let updated: String
+    let listId: Int64?
+    let deleted: Bool?
+}
+
+struct APIReadingListChanges: Codable {
+    let lists: [APIReadingList]?
+    let entries: [APIReadingListEntry]?
+    let next: String?
 }
 
 extension APIReadingListEntry {
@@ -42,6 +52,10 @@ extension APIReadingListEntry {
             return nil
         }
         return site.wmf_URL(withTitle: title)
+    }
+    
+    var articleKey: String? {
+        return articleURL?.wmf_articleDatabaseKey
     }
 }
 
@@ -112,8 +126,8 @@ class ReadingListsAPIController: NSObject {
         - listID: The list ID if it was created
         - error: Any error preventing list creation
     */
-    func createList(name: String, description: String, completion: @escaping (_ listID: Int64?,_ error: Error?) -> Swift.Void ) {
-        let bodyParams = ["name": name.precomposedStringWithCanonicalMapping, "description": description]
+    func createList(name: String, description: String?, completion: @escaping (_ listID: Int64?,_ error: Error?) -> Swift.Void ) {
+        let bodyParams = ["name": name.precomposedStringWithCanonicalMapping, "description": description ?? ""]
         post(path: "", bodyParameters: bodyParams) { (result, response, error) in
             guard let result = result, let id = result["id"] as? Int64 else {
                 completion(nil, error ?? ReadingListError.unableToCreateList)
@@ -208,13 +222,51 @@ class ReadingListsAPIController: NSObject {
         - completion: Called after the request completes
         - error: Any error preventing list update
      */
-    func updateList(withListID listID: Int64, name: String, description: String, completion: @escaping (_ error: Error?) -> Swift.Void ) {
-        put(path: "\(listID)", bodyParameters: ["name": name, "description": description]) { (result, response, error) in
+    func updateList(withListID listID: Int64, name: String, description: String?, completion: @escaping (_ error: Error?) -> Swift.Void ) {
+        put(path: "\(listID)", bodyParameters: ["name": name, "description": description ?? ""]) { (result, response, error) in
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
                 completion(error ?? ReadingListError.unableToDeleteList)
                 return
             }
             completion(nil)
+        }
+    }
+    
+    
+    /**
+     Gets updated lists and entries list API
+     - parameters:
+        - since: The continuation token. Lets the server know the current state of the device. Currently an ISO 8601 date string
+        - next: Optional continuation token
+        - lists: Lists to append to the results
+        - entries: Entries to append to the results
+        - lists: All updated lists
+        - entries: All updated entries
+        - error: Any error preventing list update
+     */
+    func updatedListsAndEntries(since: String, next: String? = nil, lists: [APIReadingList] = [], entries: [APIReadingListEntry] = [], completion: @escaping (_ lists: [APIReadingList], _ entries: [APIReadingListEntry], _ error: Error?) -> Swift.Void ) {
+        var queryParameters: [String: Any]? = nil
+        if let next = next {
+            queryParameters = ["next": next]
+        }
+        get(path: "changes/since/\(since)", queryParameters: queryParameters) { (result: APIReadingListChanges?, response, error) in
+            guard let result = result, let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                completion([], [], error ?? ReadingListError.generic)
+                return
+            }
+            var combinedLists = lists
+            if let lists = result.lists {
+                combinedLists.append(contentsOf: lists)
+            }
+            var combinedEntries = entries
+            if let entries = result.entries {
+                combinedEntries.append(contentsOf: entries)
+            }
+            if let next = result.next {
+                self.updatedListsAndEntries(since: since, next: next, lists: combinedLists, entries: combinedEntries, completion: completion)
+            } else {
+                completion(combinedLists, combinedEntries, nil)
+            }
         }
     }
     

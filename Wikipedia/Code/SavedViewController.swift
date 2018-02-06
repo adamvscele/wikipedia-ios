@@ -22,6 +22,8 @@ class SavedViewController: ViewController {
     
     @IBOutlet var extendedNavBarView: UIView!
     @IBOutlet var underBarView: UIView!
+    @IBOutlet var allArticlesButton: UIButton!
+    @IBOutlet var readingListsButton: UIButton!
     @IBOutlet weak var searchBar: UISearchBar!
     @IBOutlet var searchBarConstraints: [NSLayoutConstraint] = []
     @IBOutlet weak var sortButton: UIButton!
@@ -38,7 +40,7 @@ class SavedViewController: ViewController {
                 assertionFailure("cannot set dataStore to nil")
                 return
             }
-            title = WMFLocalizedString("saved-title", value: "Saved", comment: "Title of the saved screen shown on the saved tab\n{{Identical|Saved}}")
+            title = CommonStrings.savedTabTitle
             savedArticlesViewController.dataStore = newValue
         }
     }
@@ -85,7 +87,9 @@ class SavedViewController: ViewController {
     
     private var isAddButtonHidden: Bool = true {
         didSet {
-            navigationItem.leftBarButtonItem = isAddButtonHidden ? nil : UIBarButtonItem(barButtonSystemItem: .add, target: readingListsViewController.self, action: #selector(readingListsViewController?.presentCreateReadingListViewController))
+            let clearButtonTitle = WMFLocalizedString("saved-clear-all", value: "Clear", comment: "Text of the button shown at the top of saved pages which deletes all the saved pages\n{{Identical|Clear}}")
+            let clearButton = UIBarButtonItem(title: clearButtonTitle, style: .plain, target: savedArticlesViewController.self, action: #selector(savedArticlesViewController?.clear))
+            navigationItem.leftBarButtonItem = isAddButtonHidden ? clearButton : UIBarButtonItem(barButtonSystemItem: .add, target: readingListsViewController.self, action: #selector(readingListsViewController?.presentCreateReadingListViewController))
             navigationItem.leftBarButtonItem?.tintColor = theme.colors.link
         }
     }
@@ -132,6 +136,11 @@ class SavedViewController: ViewController {
         navigationBar.addUnderNavigationBarView(underBarView)
         navigationBar.isBackVisible = false
         currentView = .savedArticles
+        
+        let allArticlesButtonTitle = WMFLocalizedString("saved-all-articles-title", value: "All articles", comment: "Title of the all articles button on Saved screen")
+        allArticlesButton.setTitle(allArticlesButtonTitle, for: .normal)
+        let readingListsButtonTitle = WMFLocalizedString("saved-reading-lists-title", value: "Reading lists", comment: "Title of the reading lists button on Saved screen")
+        readingListsButton.setTitle(readingListsButtonTitle, for: .normal)
 
         searchBar.delegate = savedArticlesViewController
         searchBar.returnKeyType = .search

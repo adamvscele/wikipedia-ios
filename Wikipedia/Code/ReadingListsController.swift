@@ -1,9 +1,11 @@
 import Foundation
 
+internal let WMFReadingListUpdateKey = "WMFReadingListUpdateKey"
 
 public enum ReadingListError: Error, Equatable {
     case listExistsWithTheSameName(name: String)
     case unableToCreateList
+    case generic
     case unableToDeleteList
     case unableToUpdateList
     case unableToAddEntry
@@ -13,6 +15,8 @@ public enum ReadingListError: Error, Equatable {
     public var localizedDescription: String {
         switch self {
         // TODO: WMFAlertManager can't display this string
+        case .generic:
+            return WMFLocalizedString("reading-list-generic-error", value: "An unexpected error occurred while updating your reading lists.", comment: "An unexpected error occurred while updating your reading lists.")
         case .listExistsWithTheSameName(let name):
             let format = WMFLocalizedString("reading-list-exists-with-same-name", value: "A reading list already exists with the name %1$@", comment: "Informs the user that a reading list exists with the same name.")
             return String.localizedStringWithFormat(format, name)
@@ -37,324 +41,11 @@ public enum ReadingListError: Error, Equatable {
     }
 }
 
-
-fileprivate class ReadingListSyncOperation: AsyncOperation {
-    weak var readingListsController: ReadingListsController!
-    let readingListID: Int64
-    
-    init(readingListsController: ReadingListsController, readingListID: Int64) {
-        self.readingListsController = readingListsController
-        self.readingListID = readingListID
-        super.init()
-    }
-    
-    
-}
-    
-fileprivate class ReadingListsSyncOperation: AsyncOperation {
-    weak var readingListsController: ReadingListsController!
-    
-    var apiController: ReadingListsAPIController {
-        return readingListsController.apiController
-    }
-    
-    var dataStore: MWKDataStore {
-        return readingListsController.dataStore
-    }
-    
-    init(readingListsController: ReadingListsController) {
-        self.readingListsController = readingListsController
-        super.init()
-    }
-    
-    override func execute() {
-        readingListsController.apiController.getAllReadingLists { (allAPIReadingLists, getAllAPIReadingListsError) in
-            if let error = getAllAPIReadingListsError {
-                self.finish(with: error)
-                return
-            }
-            var remoteReadingListsByID: [Int64: APIReadingList] = [:]
-            var remoteReadingListsToCreateLocally: [Int64: APIReadingList] = [:]
-            var remoteReadingListsByName: [String: APIReadingList] = [:]
-            var remoteDefaultReadingList: APIReadingList?
-            for apiReadingList in allAPIReadingLists {
-                if apiReadingList.isDefault {
-                    remoteDefaultReadingList = apiReadingList
-                }
-                remoteReadingListsByID[apiReadingList.id] = apiReadingList
-                remoteReadingListsToCreateLocally[apiReadingList.id] = apiReadingList
-                remoteReadingListsByName[apiReadingList.name.precomposedStringWithCanonicalMapping] = apiReadingList
-            }
-            DispatchQueue.main.async {
-                self.dataStore.performBackgroundCoreDataOperation(onATemporaryContext: { (moc) in
-                    let group = WMFTaskGroup()
-                    let localReadingListsFetchRequest: NSFetchRequest<ReadingList> = ReadingList.fetchRequest()
-                    do {
-                        let localReadingLists = try moc.fetch(localReadingListsFetchRequest)
-                        var localReadingListsToDelete: [Int64: ReadingList] = [:]
-                        var localReadingListsToSync: [Int64: [ReadingList]] = [:]
-                        var localReadingListsIdsToMarkLocallyUpdatedFalse: Set<Int64> = []
-                        var localDefaultReadingList: ReadingList? = nil
-                        for localReadingList in localReadingLists {
-                            guard !(localReadingList.isDefault?.boolValue ?? false) else {
-                                if localDefaultReadingList != nil {
-                                    moc.delete(localReadingList)
-                                } else{
-                                    localDefaultReadingList = localReadingList
-                                    if let defaultReadingListID = remoteDefaultReadingList?.id {
-                                        localReadingListsToSync[defaultReadingListID, default: []].append(localReadingList)
-                                        remoteReadingListsToCreateLocally.removeValue(forKey: defaultReadingListID)
-                                    }
-                                }
-                                continue
-                            }
-                            guard let readingListID = localReadingList.readingListID?.int64Value else {
-                                let name = localReadingList.name ?? ""
-                                if let remoteReadingListWithTheSameName = remoteReadingListsByName[name.precomposedStringWithCanonicalMapping] {
-                                    localReadingListsToSync[remoteReadingListWithTheSameName.id, default: []].append(localReadingList)
-                                } else {
-                                    group.enter()
-                                    self.apiController.createList(name: name, description: localReadingList.readingListDescription ?? "", completion: { (listID, error) in
-                                        if let listID = listID {
-                                            localReadingListsToSync[listID, default: []].append(localReadingList)
-                                        }
-                                        group.leave()
-                                    })
-                                }
-                                continue
-                            }
-                            
-
-                            guard let remoteList = remoteReadingListsByID[readingListID] else {
-                                localReadingListsToDelete[readingListID] = localReadingList
-                                continue
-                            }
-                            
-                            localReadingListsToSync[readingListID, default: []].append(localReadingList)
-                            remoteReadingListsToCreateLocally.removeValue(forKey: readingListID)
-                            
-                            guard !localReadingList.isDeletedLocally else {
-                                group.enter()
-                                self.apiController.deleteList(withListID: readingListID, completion: { (error) in
-                                    if let error = error {
-                                        DDLogError("error deleting list with id: \(readingListID) error: \(error)")
-                                        localReadingListsToDelete.removeValue(forKey: readingListID)
-                                    }
-                                    group.leave()
-                                })
-                                continue
-                            }
-                            
-                            localReadingListsToDelete.removeValue(forKey: readingListID)
-                            
-                            if localReadingList.isUpdatedLocally {
-                                group.enter()
-                                self.apiController.updateList(withListID: readingListID, name: localReadingList.name ?? "", description: localReadingList.readingListDescription ?? "", completion: { (error) in
-                                    if let error = error {
-                                        DDLogError("error updating list with id: \(readingListID) error: \(error)")
-                                    } else {
-                                        localReadingListsIdsToMarkLocallyUpdatedFalse.insert(readingListID)
-                                    }
-                                    group.leave()
-                                })
-                                localReadingList.isUpdatedLocally = false
-                            } else {
-                                localReadingList.update(with: remoteList)
-                            }
-                        }
-                        
-                        group.wait()
-                        
-                        for (_, list) in remoteReadingListsToCreateLocally {
-                            guard let localList = NSEntityDescription.insertNewObject(forEntityName: "ReadingList", into: moc) as? ReadingList else {
-                                continue
-                            }
-                            localList.update(with: list)
-                            localReadingListsToSync[list.id, default: []].append(localList)
-                        }
-                        
-                        for (_, list) in localReadingListsToDelete {
-                            moc.delete(list)
-                        }
-
-                        
-                        var entriesByReadingListID: [Int64: [APIReadingListEntry]] = [:]
-                        
-                        for (readingListID, readingLists) in localReadingListsToSync {
-                            guard let readingList = readingLists.first else {
-                                continue
-                            }
-                            if readingList.readingListID == nil {
-                                readingList.readingListID = NSNumber(value: readingListID)
-                            }
-                            
-                            if localReadingListsIdsToMarkLocallyUpdatedFalse.contains(readingListID) {
-                                readingList.isUpdatedLocally = false
-                            }
-
-                            for duplicateReadingList in readingLists[1..<readingLists.count] {
-                                if let entries = duplicateReadingList.entries {
-                                    readingList.addToEntries(entries)
-                                }
-                                moc.delete(duplicateReadingList)
-                            }
-
-                            group.enter()
-                            self.apiController.getAllEntriesForReadingListWithID(readingListID: readingListID, completion: { (entries, error) in
-                                if error == nil {
-                                    entriesByReadingListID[readingListID] = entries
-                                }
-                                group.leave()
-                            })
-                        }
-                        
-                        group.wait()
-                        
-                        var localEntriesToSync: [Int64: ReadingListEntry] = [:]
-                        var localEntriesToDelete: [ReadingListEntry] = []
-                        var remoteEntriesToCreateLocally: [Int64: (APIReadingListEntry, ReadingList)] = [:]
-
-                        for (readingListID, readingLists) in localReadingListsToSync {
-                            guard let readingList = readingLists.first else {
-                                continue
-                            }
-                            guard let localEntries = readingList.entries else {
-                                continue
-                            }
-                            let remoteEntries = entriesByReadingListID[readingListID] ?? []
-                            //print("List \(readingList.name) has remote entries: \(remoteEntries)")
-                            for entry in remoteEntries {
-                                remoteEntriesToCreateLocally[entry.id] = (entry, readingList)
-                            }
-                            for localEntry in localEntries {
-                                guard let article = localEntry.article, let articleURL = article.url, let articleSite = articleURL.wmf_site, let articleTitle = articleURL.wmf_title else {
-                                    moc.delete(localEntry)
-                                    continue
-                                }
-                                
-                                guard !localEntry.isDeletedLocally else {
-                                    // the entry has been deleted locally
-                                    guard let entryID = localEntry.readingListEntryID?.int64Value else {
-                                        localEntriesToDelete.append(localEntry)  // the entry has been deleted locally but doesn't have an entry ID, so just delete it
-                                        continue
-                                    }
-                                    
-                                    remoteEntriesToCreateLocally.removeValue(forKey: entryID)
-                                    
-                                    group.enter()
-                                    self.apiController.removeEntry(withEntryID: entryID, fromListWithListID: readingListID, completion: { (error) in
-                                        defer {
-                                            group.leave()
-                                        }
-                                        guard error == nil else {
-                                            DDLogError("Error deleting entry withEntryID: \(entryID) fromListWithListID: \(readingListID) error: \(String(describing: error))")
-                                            return
-                                        }
-                                        localEntriesToDelete.append(localEntry)
-                                    })
-                                    continue
-                                }
-
-                                guard let entryID = localEntry.readingListEntryID?.int64Value else {
-                                    group.enter()
-                                    self.apiController.addEntryToList(withListID: readingListID, project: articleSite.absoluteString, title: articleTitle, completion: { (entryID, error) in
-                                        if let entryID = entryID {
-                                            localEntriesToSync[entryID] = localEntry
-                                        } else {
-                                            DDLogError("Missing entryID for entry: \(articleSite) \(articleTitle) in list: \(readingListID)")
-                                        }
-                                        group.leave()
-                                    })
-                                    continue
-                                }
-                                
-                                remoteEntriesToCreateLocally.removeValue(forKey: entryID)
-                            }
-                        }
-                        
-                        var remoteEntriesToCreateLocallyByArticleKey: [String: APIReadingListEntry] = [:]
-                        var requestedArticleKeys: Set<String> = []
-                        var articleSummariesByArticleKey: [String: [String: Any]] = [:]
-                        for (_, (remoteEntry, _)) in remoteEntriesToCreateLocally {
-                            guard let articleURL = remoteEntry.articleURL, let articleKey = articleURL.wmf_articleDatabaseKey else {
-                                continue
-                            }
-                            remoteEntriesToCreateLocallyByArticleKey[articleKey] = remoteEntry
-                            guard !requestedArticleKeys.contains(articleKey) else {
-                                continue
-                            }
-                            requestedArticleKeys.insert(articleKey)
-                            group.enter()
-                            URLSession.shared.wmf_fetchSummary(with: articleURL, completionHandler: { (result, response, error) in
-                                guard let result = result else {
-                                    group.leave()
-                                    return
-                                }
-                                articleSummariesByArticleKey[articleKey] = result
-                                group.leave()
-                            })
-                        }
-                        
-                        group.wait()
-                        
-                        
-                        let articles = try moc.wmf_createOrUpdateArticleSummmaries(withSummaryResponses: articleSummariesByArticleKey)
-                        var articlesByKey: [String: WMFArticle] = [:]
-                        for article in articles {
-                            guard let articleKey = article.key else {
-                                continue
-                            }
-                            articlesByKey[articleKey] = article
-                        }
-                        
-                        for (entryID, (remoteEntry, readingList)) in remoteEntriesToCreateLocally {
-                            guard let articleURL = remoteEntry.articleURL, let articleKey = articleURL.wmf_articleDatabaseKey, let article = articlesByKey[articleKey] else {
-                                continue
-                            }
-                            guard let entry = NSEntityDescription.insertNewObject(forEntityName: "ReadingListEntry", into: moc) as? ReadingListEntry else {
-                                continue
-                            }
-                            entry.readingListEntryID = NSNumber(value: entryID)
-                            entry.list = readingList
-                            entry.article = article
-                            entry.displayTitle = article.displayTitle
-                            article.savedDate = DateFormatter.wmf_iso8601().date(from: remoteEntry.created)
-                            article.addToDefaultReadingList()
-                        }
-
-                        for (entryID, entry) in localEntriesToSync {
-                            if entry.readingListEntryID == nil {
-                                entry.readingListEntryID = NSNumber(value: entryID)
-                            }
-                        }
-                        
-                        for entry in localEntriesToDelete {
-                            moc.delete(entry)
-                        }
-                        
-                        guard moc.hasChanges else {
-                            return
-                        }
-                        try moc.save()
-                        
-                    } catch let error {
-                        DDLogError("Error during reading list sync: \(error)")
-                    }
-                    self.finish()
-                })
-            }
-        }
-    }
-    
-    
-}
-
-
 @objc(WMFReadingListsController)
 public class ReadingListsController: NSObject {
-    fileprivate weak var dataStore: MWKDataStore!
-    fileprivate let apiController = ReadingListsAPIController()
-    fileprivate let operationQueue = OperationQueue()
+    internal weak var dataStore: MWKDataStore!
+    internal let apiController = ReadingListsAPIController()
+    private let operationQueue = OperationQueue()
     
     @objc init(dataStore: MWKDataStore) {
         self.dataStore = dataStore
@@ -380,6 +71,8 @@ public class ReadingListsController: NSObject {
             throw ReadingListError.unableToCreateList
         }
         
+        list.isUpdatedLocally = true
+        
         try add(articles: articles, to: list)
         
         if moc.hasChanges {
@@ -391,12 +84,126 @@ public class ReadingListsController: NSObject {
         return list
     }
     
+    /// Marks that reading lists were deleted locally and updates associated objects. Doesn't delete them from the NSManagedObjectContext - that should happen only with confirmation from the server that they were deleted.
+    ///
+    /// - Parameters:
+    ///   - readingLists: the reading lists to delete
+    internal func markLocalDeletion(for readingLists: [ReadingList]) throws {
+        for readingList in readingLists {
+            readingList.isDeletedLocally = true
+            readingList.isUpdatedLocally = true
+            for entry in readingList.entries ?? [] {
+                entry.isDeletedLocally = true
+                entry.isUpdatedLocally = true
+            }
+            let articles = readingList.articles ?? []
+            readingList.articles = []
+            for article in articles {
+                article.readingListsDidChange()
+            }
+        }
+    }
+    
+    /// Marks that reading lists were deleted locally and updates associated objects. Doesn't delete them from the NSManagedObjectContext - that should happen only with confirmation from the server that they were deleted.
+    ///
+    /// - Parameters:
+    ///   - readingLists: the reading lists to delete
+    internal func markLocalDeletion(for readingListEntries: [ReadingListEntry]) throws {
+        for entry in readingListEntries {
+            entry.isDeletedLocally = true
+            entry.isUpdatedLocally = true
+            if let moc = entry.managedObjectContext, let key = entry.articleKey, let article = dataStore.fetchArticle(withKey: key, in: moc), let list = entry.list {
+                list.removeFromArticles(article)
+                article.readingListsDidChange()
+            }
+            entry.list?.updateCountOfEntries()
+        }
+    }
+    
+    internal func locallyCreate(_ readingListEntries: [APIReadingListEntry], with readingListsByEntryID: [Int64: ReadingList]? = nil, in moc: NSManagedObjectContext) throws {
+        let group = WMFTaskGroup()
+        var remoteEntriesToCreateLocallyByArticleKey: [String: APIReadingListEntry] = [:]
+        var requestedArticleKeys: Set<String> = []
+        var articleSummariesByArticleKey: [String: [String: Any]] = [:]
+        for remoteEntry in readingListEntries {
+            guard let articleURL = remoteEntry.articleURL, let articleKey = articleURL.wmf_articleDatabaseKey else {
+                continue
+            }
+            remoteEntriesToCreateLocallyByArticleKey[articleKey] = remoteEntry
+            guard !requestedArticleKeys.contains(articleKey) else {
+                continue
+            }
+            requestedArticleKeys.insert(articleKey)
+            group.enter()
+            URLSession.shared.wmf_fetchSummary(with: articleURL, completionHandler: { (result, response, error) in
+                guard let result = result else {
+                    group.leave()
+                    return
+                }
+                articleSummariesByArticleKey[articleKey] = result
+                group.leave()
+            })
+        }
+        
+        group.wait()
+        
+        
+        let articles = try moc.wmf_createOrUpdateArticleSummmaries(withSummaryResponses: articleSummariesByArticleKey)
+        var articlesByKey: [String: WMFArticle] = [:]
+        for article in articles {
+            guard let articleKey = article.key else {
+                continue
+            }
+            articlesByKey[articleKey] = article
+        }
+        
+        var finalReadingListsByEntryID: [Int64: ReadingList]
+        if let readingListsByEntryID = readingListsByEntryID {
+            finalReadingListsByEntryID = readingListsByEntryID
+        } else {
+            finalReadingListsByEntryID = [:]
+            var readingListsByReadingListID: [Int64: ReadingList] = [:]
+            let localReadingListsFetch: NSFetchRequest<ReadingList> = ReadingList.fetchRequest()
+            localReadingListsFetch.predicate = NSPredicate(format: "readingListID IN %@", readingListEntries.flatMap { $0.listId } )
+            let localReadingLists = try moc.fetch(localReadingListsFetch)
+            for localReadingList in localReadingLists {
+                guard let localReadingListID = localReadingList.readingListID?.int64Value else {
+                    continue
+                }
+                readingListsByReadingListID[localReadingListID] = localReadingList
+            }
+            for readingListEntry in readingListEntries {
+                guard let listId = readingListEntry.listId, let readingList = readingListsByReadingListID[listId] else {
+                    DDLogError("Missing list for reading list entry: \(readingListEntry)")
+                    assert(false)
+                    continue
+                }
+                finalReadingListsByEntryID[readingListEntry.id] = readingList
+            }
+        }
+        
+        for remoteEntry in readingListEntries {
+            guard let articleURL = remoteEntry.articleURL, let articleKey = articleURL.wmf_articleDatabaseKey, let article = articlesByKey[articleKey], let readingList = finalReadingListsByEntryID[remoteEntry.id] else {
+                continue
+            }
+            guard let entry = NSEntityDescription.insertNewObject(forEntityName: "ReadingListEntry", into: moc) as? ReadingListEntry else {
+                continue
+            }
+            entry.update(with: remoteEntry)
+            entry.list = readingList
+            entry.articleKey = article.key
+            entry.displayTitle = article.displayTitle
+            article.savedDate = entry.createdDate as Date?
+            readingList.addToArticles(article)
+            article.readingListsDidChange()
+            readingList.updateCountOfEntries()
+        }
+    }
+    
     public func delete(readingLists: [ReadingList]) throws {
         let moc = dataStore.viewContext
         
-        for readingList in readingLists {
-            readingList.isDeletedLocally = true
-        }
+        try markLocalDeletion(for: readingLists)
         
         if moc.hasChanges {
             try moc.save()
@@ -406,26 +213,27 @@ public class ReadingListsController: NSObject {
     }
     
     public func add(articles: [WMFArticle], to readingList: ReadingList) throws {
-        guard !readingList.isDefaultList else {
-            return
-        }
         guard articles.count > 0 else {
             return
         }
         assert(Thread.isMainThread)
         let moc = dataStore.viewContext
         let existingKeys = Set(readingList.articleKeys)
+        
         for article in articles {
-            article.removeFromDefaultReadingList()
+            try article.removeFromDefaultReadingList()
             guard let key = article.key, !existingKeys.contains(key) else {
                 continue
             }
-            guard let entry = moc.wmf_create(entityNamed: "ReadingListEntry", withValue: article, forKey: "article") as? ReadingListEntry else {
+            guard let entry = moc.wmf_create(entityNamed: "ReadingListEntry", withValue: key, forKey: "articleKey") as? ReadingListEntry else {
                 return
             }
+            entry.isUpdatedLocally = true
             let url = URL(string: key)
             entry.displayTitle = url?.wmf_title
             entry.list = readingList
+            readingList.addToArticles(article)
+            article.readingListsDidChange()
         }
         
         readingList.updateCountOfEntries()
@@ -436,7 +244,8 @@ public class ReadingListsController: NSObject {
         sync()
     }
 
-    fileprivate let isSyncEnabledKey = "WMFIsReadingListSyncEnabled"
+
+    private let isSyncEnabledKey = "WMFIsReadingListSyncEnabled"
 
     @objc var isSyncEnabled: Bool {
         get {
@@ -472,27 +281,51 @@ public class ReadingListsController: NSObject {
     
     
     @objc func _sync() {
-        let op = ReadingListsSyncOperation(readingListsController: self)
-        operationQueue.addOperation(op)
+//        let sync = ReadingListsSyncOperation(readingListsController: self)
+//        operationQueue.addOperation(sync)
+//        let update = ReadingListsUpdateOperation(readingListsController: self)
+//        operationQueue.addOperation(update)
     }
     
-    fileprivate func sync() {
+    private func sync() {
         assert(Thread.isMainThread)
-        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(_sync), object: nil)
-        perform(#selector(_sync), with: nil, afterDelay: 0.5)
+//        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(_sync), object: nil)
+//        perform(#selector(_sync), with: nil, afterDelay: 0.5)
+
+        do {
+            // For users without syncing enabled, we should immediately delete locally deleted items
+            let listsToDeleteFetchRequest: NSFetchRequest<NSFetchRequestResult> = ReadingList.fetchRequest()
+            listsToDeleteFetchRequest.predicate = NSPredicate(format: "isDeletedLocally == YES")
+            let listBatchDeleteRequest: NSBatchDeleteRequest = NSBatchDeleteRequest(fetchRequest: listsToDeleteFetchRequest)
+            try dataStore.viewContext.execute(listBatchDeleteRequest)
+            
+            let entriesToDeleteFetchRequest: NSFetchRequest<NSFetchRequestResult> = ReadingListEntry.fetchRequest()
+            entriesToDeleteFetchRequest.predicate = NSPredicate(format: "isDeletedLocally == YES")
+            let entryBatchDeleteRequest: NSBatchDeleteRequest = NSBatchDeleteRequest(fetchRequest: entriesToDeleteFetchRequest)
+            try dataStore.viewContext.execute(entryBatchDeleteRequest)
+        } catch let error {
+            DDLogError("Error on batch delete \(error)")
+        }
     }
     
     public func remove(articles: [WMFArticle], readingList: ReadingList) throws {
         assert(Thread.isMainThread)
         let moc = dataStore.viewContext
         
+        let articleKeys = articles.flatMap { $0.key }
+        for article in articles {
+            readingList.removeFromArticles(article)
+            article.readingListsDidChange()
+        }
+        
         let entriesRequest: NSFetchRequest<ReadingListEntry> = ReadingListEntry.fetchRequest()
-        entriesRequest.predicate = NSPredicate(format: "list == %@ && article IN %@", readingList, articles)
+        entriesRequest.predicate = NSPredicate(format: "list == %@ && articleKey IN %@", readingList, articleKeys)
         let entriesToDelete = try moc.fetch(entriesRequest)
         for entry in entriesToDelete {
             entry.isDeletedLocally = true
+            entry.isUpdatedLocally = true
         }
-        
+
         readingList.updateCountOfEntries()
 
         if moc.hasChanges {
@@ -504,10 +337,7 @@ public class ReadingListsController: NSObject {
     public func remove(entries: [ReadingListEntry]) throws {
         assert(Thread.isMainThread)
         let moc = dataStore.viewContext
-        for entry in entries {
-            entry.isDeletedLocally = true
-            entry.article = nil
-        }
+        try markLocalDeletion(for: entries)
         if moc.hasChanges {
             try moc.save()
         }
@@ -519,7 +349,7 @@ public class ReadingListsController: NSObject {
         do {
             let moc = dataStore.viewContext
             article.savedDate = Date()
-            article.addToDefaultReadingList()
+            try article.addToDefaultReadingList()
             if moc.hasChanges {
                 try moc.save()
             }
@@ -534,14 +364,13 @@ public class ReadingListsController: NSObject {
         do {
             let moc = dataStore.viewContext
             article.savedDate = nil
-            for entry in article.readingListEntries ?? [] {
-                entry.isDeletedLocally = true
-                entry.list?.updateCountOfEntries()
+            guard let key = article.key else {
+                return
             }
-            if moc.hasChanges {
-                try moc.save()
-            }
-            sync()
+            let entryFetchRequest: NSFetchRequest<ReadingListEntry> = ReadingListEntry.fetchRequest()
+            entryFetchRequest.predicate = NSPredicate(format: "articleKey == %@", key)
+            let entries = try moc.fetch(entryFetchRequest)
+            try remove(entries: entries)
         } catch let error {
             DDLogError("Error removing article from default list: \(error)")
         }
@@ -556,8 +385,7 @@ public class ReadingListsController: NSObject {
                 guard let article = dataStore.fetchArticle(with: url) else {
                     continue
                 }
-                article.savedDate = nil
-                article.removeFromDefaultReadingList()
+                unsave(article)
             }
             if moc.hasChanges {
                 try moc.save()
@@ -568,26 +396,30 @@ public class ReadingListsController: NSObject {
         }
     }
     
-    @objc public func removeAllArticlesFromDefaultReadingList()  {
+    @objc public func unsaveAllArticles()  {
         assert(Thread.isMainThread)
         do {
             let moc = dataStore.viewContext
-            let defaultList = moc.wmf_defaultReadingList
-            for entry in defaultList.entries ?? [] {
-                entry.article?.removeFromDefaultReadingList()
-                entry.article?.savedDate = nil
-                entry.isDeletedLocally = true
-            }
-            if moc.hasChanges {
-                try moc.save()
+            let savedArticlesFetchRequest: NSFetchRequest<WMFArticle> = WMFArticle.fetchRequest()
+            savedArticlesFetchRequest.predicate = NSPredicate(format: "savedDate != NULL")
+            savedArticlesFetchRequest.fetchLimit = 500
+            var savedArticles = try moc.fetch(savedArticlesFetchRequest)
+            while savedArticles.count > 0 {
+                for article in savedArticles {
+                    unsave(article)
+                }
+                if moc.hasChanges {
+                    try moc.save()
+                }
+                savedArticles = try moc.fetch(savedArticlesFetchRequest)
             }
             sync()
         } catch let error {
             DDLogError("Error removing all articles from default list: \(error)")
         }
     }
-
-
+    
+    
     /// Fetches n articles with lead images for a given reading list.
     ///
     /// - Parameters:
@@ -597,12 +429,141 @@ public class ReadingListsController: NSObject {
     public func articlesWithLeadImages(for readingList: ReadingList, limit: Int) throws -> [WMFArticle] {
         assert(Thread.isMainThread)
         let moc = dataStore.viewContext
-        let request: NSFetchRequest<ReadingListEntry> = ReadingListEntry.fetchRequest()
-        request.predicate = NSPredicate(format: "list == %@ && isDeletedLocally != YES && article.imageURLString != NULL", readingList)
+        let request: NSFetchRequest<WMFArticle> = WMFArticle.fetchRequest()
+        request.predicate = NSPredicate(format: "ANY readingLists == %@ && imageURLString != NULL", readingList)
+        request.sortDescriptors = [NSSortDescriptor(key: "savedDate", ascending: false)]
         request.fetchLimit = limit
-        return (try moc.fetch(request)).flatMap { $0.article }
+        return try moc.fetch(request)
     }
     
+    internal func createOrUpdate(remoteReadingLists: [APIReadingList], inManagedObjectContext moc: NSManagedObjectContext) throws -> Date {
+        var sinceDate: Date = Date.distantPast
+
+        // Arrange remote lists by ID and name for merging with local lists
+        var remoteReadingListsByID: [Int64: APIReadingList] = [:]
+        var remoteReadingListsByName: [String: APIReadingList] = [:]
+        for remoteReadingList in remoteReadingLists {
+            if let date = DateFormatter.wmf_iso8601().date(from: remoteReadingList.updated),
+                date.compare(sinceDate) == .orderedDescending {
+                sinceDate = date
+            }
+            remoteReadingListsByID[remoteReadingList.id] = remoteReadingList
+            remoteReadingListsByName[remoteReadingList.name.precomposedStringWithCanonicalMapping] = remoteReadingList
+        }
+        
+        let localReadingListsFetch: NSFetchRequest<ReadingList> = ReadingList.fetchRequest()
+        let canonicalNames = Array(remoteReadingListsByName.keys).map { $0.precomposedStringWithCanonicalMapping }
+        localReadingListsFetch.predicate = NSPredicate(format: "readingListID IN %@ || canonicalName IN %@", Array(remoteReadingListsByID.keys), canonicalNames)
+        let localReadingLists = try moc.fetch(localReadingListsFetch)
+        for localReadingList in localReadingLists {
+            var remoteReadingList: APIReadingList?
+            if let localReadingListID = localReadingList.readingListID?.int64Value {
+                // remove from the dictionary because we will create any lists left in the dictionary
+                remoteReadingList = remoteReadingListsByID.removeValue(forKey: localReadingListID)
+                if let remoteReadingListName = remoteReadingList?.name {
+                    remoteReadingListsByName.removeValue(forKey: remoteReadingListName)
+                }
+            }
+            
+            if remoteReadingList == nil {
+                if let localReadingListName = localReadingList.name?.precomposedStringWithCanonicalMapping {
+                    remoteReadingList = remoteReadingListsByName.removeValue(forKey: localReadingListName)
+                    if let remoteReadingListID = remoteReadingList?.id {
+                        // remove from the dictionary because we will create any lists left in this dictionary
+                        remoteReadingListsByID.removeValue(forKey: remoteReadingListID)
+                    }
+                }
+            }
+
+            guard let remoteReadingListForUpdate = remoteReadingList else {
+                DDLogError("Fetch produced a list without a matching id or name: \(localReadingList)")
+                assert(false)
+                continue
+            }
+            
+            let isDeleted = remoteReadingListForUpdate.deleted ?? false
+            if isDeleted {
+                try markLocalDeletion(for: [localReadingList])
+                moc.delete(localReadingList) // object can be removed since we have the server-side update
+            } else {
+                localReadingList.update(with: remoteReadingListForUpdate)
+            }
+        }
+        
+        
+        // create any list that wasn't matched by ID or name
+        for (_, remoteReadingList) in remoteReadingListsByID {
+            guard let localList = NSEntityDescription.insertNewObject(forEntityName: "ReadingList", into: moc) as? ReadingList else {
+                continue
+            }
+            localList.update(with: remoteReadingList)
+        }
+        
+        return sinceDate
+    }
+    
+    internal func createOrUpdate(remoteReadingListEntries: [APIReadingListEntry], for readingListID: Int64? = nil, inManagedObjectContext moc: NSManagedObjectContext) throws -> Date {
+        var sinceDate: Date = Date.distantPast
+
+        // Arrange remote list entries by ID and key for merging with local lists
+        var remoteReadingListEntriesByID: [Int64: APIReadingListEntry] = [:]
+        var remoteReadingListEntriesByListIDAndArticleKey: [Int64: [String: APIReadingListEntry]] = [:]
+        var allArticleKeys: Set<String> = []
+        for remoteReadingListEntry in remoteReadingListEntries {
+            if let date = DateFormatter.wmf_iso8601().date(from: remoteReadingListEntry.updated),
+                date.compare(sinceDate) == .orderedDescending {
+                sinceDate = date
+            }
+            guard let listID = remoteReadingListEntry.listId ?? readingListID, let articleKey = remoteReadingListEntry.articleKey else {
+                DDLogError("missing id or article key for remote entry: \(remoteReadingListEntry)")
+                assert(false)
+                continue
+            }
+            
+            remoteReadingListEntriesByID[remoteReadingListEntry.id] = remoteReadingListEntry
+            allArticleKeys.insert(articleKey)
+            remoteReadingListEntriesByListIDAndArticleKey[listID, default: [:]][articleKey] = remoteReadingListEntry
+        }
+
+        let localReadingListEntryFetch: NSFetchRequest<ReadingListEntry> = ReadingListEntry.fetchRequest()
+        localReadingListEntryFetch.predicate = NSPredicate(format: "readingListEntryID IN %@ || (list.readingListID IN %@ && articleKey IN %@)", Array(remoteReadingListEntriesByID.keys), Array(remoteReadingListEntriesByListIDAndArticleKey.keys), allArticleKeys)
+        let localReadingListEntries = try moc.fetch(localReadingListEntryFetch)
+        for localReadingListEntry in localReadingListEntries {
+            var remoteReadingListEntry: APIReadingListEntry?
+            if let localReadingListEntryID = localReadingListEntry.readingListEntryID?.int64Value {
+                remoteReadingListEntry = remoteReadingListEntriesByID.removeValue(forKey: localReadingListEntryID)
+                if let remoteReadingListKey = remoteReadingListEntry?.articleKey, let remoteReadingListID = remoteReadingListEntry?.listId {
+                    remoteReadingListEntriesByListIDAndArticleKey[remoteReadingListID]?.removeValue(forKey: remoteReadingListKey)
+                }
+            }
+            
+            if let localReadingListEntryArticleKey = localReadingListEntry.articleKey, let localReadingListEntryListID = localReadingListEntry.list?.readingListID?.int64Value {
+                let remoteReadingListEntryForListAndKey = remoteReadingListEntriesByListIDAndArticleKey[localReadingListEntryListID]?.removeValue(forKey: localReadingListEntryArticleKey)
+                if let remoteReadingListID = remoteReadingListEntryForListAndKey?.id, remoteReadingListEntry == nil {
+                    remoteReadingListEntry = remoteReadingListEntryForListAndKey
+                    remoteReadingListEntriesByID.removeValue(forKey: remoteReadingListID)
+                }
+            }
+            
+            guard let remoteReadingListEntryForUpdate = remoteReadingListEntry else {
+                DDLogError("Fetch produced a list entry without a matching id or name: \(localReadingListEntry)")
+                continue
+            }
+            
+            let isDeleted = remoteReadingListEntryForUpdate.deleted ?? false
+            if isDeleted {
+                try markLocalDeletion(for: [localReadingListEntry]) // updates associated objects
+                moc.delete(localReadingListEntry) // object can be removed since we have the server-side update
+            } else {
+                localReadingListEntry.update(with: remoteReadingListEntryForUpdate)
+            }
+        }
+
+        // create any list that wasn't matched by ID or name
+        try locallyCreate(Array(remoteReadingListEntriesByID.values), in: moc)
+
+        return sinceDate
+    }
 }
 
 
@@ -623,39 +584,75 @@ public extension NSManagedObjectContext {
     }
 }
 
-fileprivate extension WMFArticle {
+internal extension WMFArticle {
+    func fetchReadingListEntries() throws -> [ReadingListEntry] {
+        guard let moc = managedObjectContext, let key = key else {
+            return []
+        }
+        let entryFetchRequest: NSFetchRequest<ReadingListEntry> = ReadingListEntry.fetchRequest()
+        entryFetchRequest.predicate = NSPredicate(format: "articleKey == %@", key)
+        return try moc.fetch(entryFetchRequest)
+    }
     
-    func fetchDefaultListEntry() -> ReadingListEntry? {
-        return readingListEntries?.first(where: { (entry) -> Bool in
+    func fetchDefaultListEntry() throws -> ReadingListEntry? {
+        let readingListEntries = try fetchReadingListEntries()
+        return readingListEntries.first(where: { (entry) -> Bool in
             return (entry.list?.isDefault?.boolValue ?? false) && !entry.isDeletedLocally
         })
     }
     
-    func addToDefaultReadingList() {
+    func addToDefaultReadingList() throws {
         guard let moc = self.managedObjectContext else {
             return
         }
         
-        guard fetchDefaultListEntry() == nil else {
+        guard try fetchDefaultListEntry() == nil else {
             return
         }
         
         let defaultReadingList = moc.wmf_defaultReadingList
         let defaultListEntry = NSEntityDescription.insertNewObject(forEntityName: "ReadingListEntry", into: moc) as? ReadingListEntry
-        defaultListEntry?.article = self
+        defaultListEntry?.articleKey = self.key
         defaultListEntry?.list = defaultReadingList
         defaultListEntry?.displayTitle = displayTitle
+        defaultReadingList.addToArticles(self)
         defaultReadingList.updateCountOfEntries()
+        readingListsDidChange()
     }
     
-    func removeFromDefaultReadingList() {
-        for entry in readingListEntries ?? [] {
-            guard entry.list?.isDefaultList ?? true else {
+    func removeFromDefaultReadingList() throws {
+        let entries = try fetchReadingListEntries()
+        for entry in entries {
+            guard let list = entry.list, list.isDefaultList else {
                 return
             }
             entry.isDeletedLocally = true
+            entry.isUpdatedLocally = true
             entry.list?.updateCountOfEntries()
+            list.removeFromArticles(self)
+            readingListsDidChange()
+        }
+    }
+    
+    func readingListsDidChange() {
+        let readingLists = self.readingLists ?? []
+        if readingLists.count == 0 && savedDate != nil {
+            savedDate = nil
+        } else if readingLists.count > 0 && savedDate == nil {
+            savedDate = Date()
         }
     }
 }
 
+extension WMFArticle {
+    public var isInDefaultList: Bool {
+        guard let readingLists = self.readingLists else {
+            return false
+        }
+        return readingLists.filter { $0.isDefaultList }.count > 0
+    }
+    
+    public var isOnlyInDefaultList: Bool {
+        return (readingLists ?? []).count == 1 && isInDefaultList
+    }
+}

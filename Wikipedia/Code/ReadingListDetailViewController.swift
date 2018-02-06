@@ -76,7 +76,7 @@ class ReadingListDetailViewController: ColumnarCollectionViewController, Editabl
     }
     
     private func articleURL(at indexPath: IndexPath) -> URL? {
-        guard let entry = entry(at: indexPath), let key = entry.article?.key else {
+        guard let entry = entry(at: indexPath), let key = entry.articleKey else {
             assertionFailure("Can't get articleURL")
             return nil
         }
@@ -84,7 +84,7 @@ class ReadingListDetailViewController: ColumnarCollectionViewController, Editabl
     }
     
     private func article(at indexPath: IndexPath) -> WMFArticle? {
-        guard let entry = entry(at: indexPath), let key = entry.article?.key, let article = dataStore.fetchArticle(withKey: key) else {
+        guard let entry = entry(at: indexPath), let key = entry.articleKey, let article = dataStore.fetchArticle(withKey: key) else {
             return nil
         }
         return article
@@ -228,23 +228,7 @@ extension ReadingListDetailViewController: ActionDelegate {
                 return true
             }
         case .share:
-            let shareActivityController: ShareActivityController?
-            if let article = article(at: indexPath) {
-                shareActivityController = ShareActivityController(article: article, context: self)
-            } else if let articleURL =  self.articleURL(at: indexPath) {
-                shareActivityController = ShareActivityController(articleURL: articleURL, userDataStore: dataStore, context: self)
-            } else {
-                shareActivityController = nil
-            }
-            if let viewController = shareActivityController {
-                if UIDevice.current.userInterfaceIdiom == .pad {
-                    let cell = collectionView.cellForItem(at: indexPath)
-                    viewController.popoverPresentationController?.sourceView = cell ?? view
-                    viewController.popoverPresentationController?.sourceRect = cell?.bounds ?? view.bounds
-                }
-                present(viewController, animated: true, completion: nil)
-                return true
-            }
+            return share(article: article(at: indexPath), articleURL: articleURL(at: indexPath), at: indexPath, dataStore: dataStore, theme: theme)
         }
         return false
     }
@@ -258,13 +242,7 @@ extension ReadingListDetailViewController: ActionDelegate {
     
     func availableActions(at indexPath: IndexPath) -> [Action] {
         var actions: [Action] = []
-        
-        if canSave(at: indexPath) {
-            actions.append(ActionType.save.action(with: self, indexPath: indexPath))
-        } else {
-            actions.append(ActionType.unsave.action(with: self, indexPath: indexPath))
-        }
-        
+
         if articleURL(at: indexPath) != nil {
             actions.append(ActionType.share.action(with: self, indexPath: indexPath))
         }
@@ -274,6 +252,8 @@ extension ReadingListDetailViewController: ActionDelegate {
         return actions
     }
 }
+
+extension ReadingListDetailViewController: ShareableArticlesProvider {}
 
 // MARK: - BatchEditNavigationDelegate
 
@@ -362,7 +342,7 @@ extension ReadingListDetailViewController {
     private func configure(cell: SavedArticlesCollectionViewCell, forItemAt indexPath: IndexPath, layoutOnly: Bool) {
         cell.isBatchEditable = true
         
-        guard let entry = entry(at: indexPath), let articleKey = entry.article?.key else {
+        guard let entry = entry(at: indexPath), let articleKey = entry.articleKey else {
             assertionFailure("Coudn't get a reading list entry or an article key to configure the cell")
             return
         }
